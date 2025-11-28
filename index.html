@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>季打分隊</title>
+    
+    <!-- 1. 引入 Tailwind CSS (樣式庫) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. 設定 Import Map (讓瀏覽器知道去哪裡抓 React 和圖示庫) -->
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "lucide-react": "https://esm.sh/lucide-react@0.294.0"
+        }
+    }
+    </script>
+
+    <!-- 3. 引入 Babel (讓瀏覽器能看懂 React JSX) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* 針對 iOS 安全區域的優化 */
+        body {
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+            background-color: #f8fafc; /* slate-50 */
+        }
+        /* 隱藏捲軸但保留功能 */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        /* 卡片翻轉效果 */
+        .perspective-1000 { perspective: 1000px; }
+        .transform-style-3d { transform-style: preserve-3d; }
+        .backface-hidden { backface-visibility: hidden; }
+        .rotate-y-180 { transform: rotateY(180deg); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- 4. 應用程式主邏輯 -->
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { 
+            Users, UserPlus, Trash2, Shuffle, Copy, RefreshCcw, Settings, 
+            Trophy, TrendingUp, History, PlayCircle, Medal, AlertCircle, 
+            Swords, Club, Diamond, Heart, Spade, Gamepad2, User, LayoutList, 
+            XCircle, CheckCircle2
+        } from 'lucide-react';
+
+        function App() {
+            // === 初始化預設名單 ===
+            const getInitialPlayers = () => {
+                const defaultList = [
+                    "陳信志", "東東", "彥傑", "承彥", "勁惟", "興彥",
+                    "啟文", "祐禎", "大辰", "小刀", "緯軒", "耀熙",
+                    "子欣F", "慧穎F", "姿穎F", "克洛伊F", "盧比F", "寶慈F"
+                ];
+
+                return defaultList.map((name, index) => {
+                    let gender = 'M'; 
+                    let cleanName = name.trim();
+                    const upperName = cleanName.toUpperCase();
+                    
+                    // 判斷性別邏輯 (同批次匯入)
+                    if (
+                        cleanName.includes('(女)') || cleanName.includes('（女）') || 
+                        upperName.endsWith(' F') || upperName.endsWith('+F') ||
+                        upperName.endsWith('(F)') || (upperName.endsWith('F') && !upperName.includes(' '))
+                    ) {
+                        gender = 'F';
+                        cleanName = cleanName.replace(/[\(（]女[\)）]/g, '').replace(/[\(（]F[\)）]/gi, '').replace(/\s*[\+]?F$/i, '').trim();
+                    } else if (
+                        cleanName.includes('(男)') || cleanName.includes('（男）') || 
+                        upperName.endsWith(' M') || upperName.endsWith('+M')
+                    ) {
+                        gender = 'M';
+                        cleanName = cleanName.replace(/[\(（]男[\)）]/g, '').replace(/\s*[\+]?M$/i, '').trim();
+                    }
+
+                    return {
+                        id: Date.now() + index, // 確保 ID 唯一
+                        name: cleanName,
+                        gender: gender,
+                        score: 0,
+                        gamesPlayed: 0
+                    };
+                });
+            };
+
+            // === 狀態管理 ===
+            const [players, setPlayers] = useState(getInitialPlayers()); // 使用預設名單初始化
+            const [nameInput, setNameInput] = useState('');
+            const [genderInput, setGenderInput] = useState('M'); 
+            const [teamCount, setTeamCount] = useState(3);
+            const [teams, setTeams] = useState([]);
+            
+            // 模式: 'casual', 'tournament' (週三季打), 'poker'
+            const [mode, setMode] = useState('casual'); 
+            const [currentRound, setCurrentRound] = useState(1);
+            const [matchHistory, setMatchHistory] = useState([]);
+            
+            // 積分賽變數
+            const [matchTeams, setMatchTeams] = useState([1, 2]); // 預設紅心(1) vs 方塊(2)
+            const [score1, setScore1] = useState('');
+            const [score2, setScore2] = useState('');
+            
+            // 批次與複製
+            const [isBatchMode, setIsBatchMode] = useState(false);
+            const [batchInput, setBatchInput] = useState('');
+            const [copied, setCopied] = useState(false);
+
+            // === UI 提示狀態 (Toast) ===
+            const [toast, setToast] = useState({ show: false, message: '', type: 'info' }); 
+
+            const showToast = (message, type = 'info') => {
+                setToast({ show: true, message, type });
+                setTimeout(() => setToast({ show: false, message: '', type: 'info' }), 3000);
+            };
+
+            // === 撲克牌模式專用狀態 ===
+            const [pokerState, setPokerState] = useState({
+                active: false,
+                maleDeck: [],
+                femaleDeck: [],
+                currentGender: 'M', 
+                lastDrawnCard: null, 
+                isFlipping: false,
+                assignedPlayers: [] 
+            });
+
+            // === 基礎功能 ===
+            const addPlayer = () => {
+                if (!nameInput.trim()) return;
+                const newPlayer = {
+                    id: Date.now(),
+                    name: nameInput.trim(),
+                    gender: genderInput,
+                    score: 0, 
+                    gamesPlayed: 0
+                };
+                setPlayers([...players, newPlayer]);
+                setNameInput('');
+            };
+
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter') addPlayer();
+            };
+
+            const removePlayer = (id) => {
+                setPlayers(players.filter(p => p.id !== id));
+            };
+
+            const clearAllPlayers = () => {
+                if (window.confirm('確定要清空所有球員名單嗎？')) {
+                    setPlayers([]);
+                    setTeams([]);
+                    resetTournament();
+                    resetPokerMode();
+                }
+            };
+
+            const handleBatchAdd = () => {
+                if (!batchInput.trim()) return;
+                const names = batchInput.split(/\n/).map(n => n.trim()).filter(n => n.length > 0);
+                const newPlayers = names.map((name, index) => {
+                    let gender = genderInput; 
+                    let cleanName = name;
+                    const upperName = name.toUpperCase();
+                    
+                    if (
+                        name.includes('(女)') || name.includes('（女）') || 
+                        upperName.endsWith(' F') || upperName.endsWith('+F') ||
+                        upperName.endsWith('(F)') || (upperName.endsWith('F') && !upperName.includes(' '))
+                    ) {
+                        gender = 'F';
+                        cleanName = name.replace(/[\(（]女[\)）]/g, '').replace(/[\(（]F[\)）]/gi, '').replace(/\s*[\+]?F$/i, '').trim();
+                    } else if (
+                        name.includes('(男)') || name.includes('（男）') || 
+                        upperName.endsWith(' M') || upperName.endsWith('+M')
+                    ) {
+                        gender = 'M';
+                        cleanName = name.replace(/[\(（]男[\)）]/g, '').replace(/\s*[\+]?M$/i, '').trim();
+                    }
+
+                    return {
+                        id: Date.now() + index,
+                        name: cleanName,
+                        gender: gender,
+                        score: 0,
+                        gamesPlayed: 0
+                    };
+                });
+                setPlayers([...players, ...newPlayers]);
+                setBatchInput('');
+                setIsBatchMode(false);
+                showToast(`成功匯入 ${newPlayers.length} 位球員`, 'success');
+            };
+
+            const shuffleArray = (array) => {
+                let newArray = [...array];
+                for (let i = newArray.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+                }
+                return newArray;
+            };
+
+            // === 撲克牌邏輯 ===
+            const initPokerDecks = () => {
+                const maxPerTeam = 6;
+                let teamSlots = { 'S': 0, 'H': 0, 'D': 0 }; // used count
+                
+                const males = players.filter(p => p.gender === 'M');
+                const females = players.filter(p => p.gender === 'F');
+                
+                if (players.length > 18) {
+                    showToast("撲克牌模式最多支援 18 人", 'error');
+                    return;
+                }
+
+                let fCount = females.length;
+                let suitOrder = [];
+                if (Math.random() > 0.5) {
+                    suitOrder = ['H', 'D', 'S', 'H', 'D', 'S', 'H', 'D', 'S', 'H', 'D', 'S', 'H', 'D', 'S', 'H', 'D', 'S'];
+                } else {
+                    suitOrder = ['D', 'H', 'S', 'D', 'H', 'S', 'D', 'H', 'S', 'D', 'H', 'S', 'D', 'H', 'S', 'D', 'H', 'S'];
+                }
+
+                let fDistribution = { 'S': 0, 'H': 0, 'D': 0 };
+                for (let i = 0; i < fCount; i++) {
+                    fDistribution[suitOrder[i]]++;
+                }
+
+                let mCount = males.length;
+                let mDistribution = { 'S': 0, 'H': 0, 'D': 0 };
+                let teamSizes = { 'S': fDistribution['S'], 'H': fDistribution['H'], 'D': fDistribution['D'] };
+                
+                for (let i = 0; i < mCount; i++) {
+                    let targetSuit = Object.keys(teamSizes).sort((a,b) => teamSizes[a] - teamSizes[b])[0];
+                    if (teamSizes[targetSuit] >= 6) {
+                        targetSuit = Object.keys(teamSizes).find(s => teamSizes[s] < 6) || 'S';
+                    }
+                    mDistribution[targetSuit]++;
+                    teamSizes[targetSuit]++;
+                }
+
+                let tempMaleDeck = [];
+                let tempFemaleDeck = [];
+                
+                ['S', 'H', 'D'].forEach(suit => {
+                    for(let k=0; k < fDistribution[suit]; k++) tempFemaleDeck.push({ suit, id: `F-${suit}-${k}` });
+                    for(let k=0; k < mDistribution[suit]; k++) tempMaleDeck.push({ suit, id: `M-${suit}-${k}` });
+                });
+
+                setPokerState({
+                    active: true,
+                    maleDeck: shuffleArray(tempMaleDeck),
+                    femaleDeck: shuffleArray(tempFemaleDeck),
+                    currentGender: 'M',
+                    lastDrawnCard: null,
+                    isFlipping: false,
+                    assignedPlayers: []
+                });
+                setMode('poker');
+            };
+
+            const drawCard = () => {
+                if (pokerState.isFlipping) return;
+                const deckKey = pokerState.currentGender === 'M' ? 'maleDeck' : 'femaleDeck';
+                const currentDeck = pokerState[deckKey];
+
+                if (currentDeck.length === 0) {
+                    showToast(`沒有${pokerState.currentGender === 'M' ? '男生' : '女生'}的牌了！`, 'error');
+                    return;
+                }
+
+                const newDeck = [...currentDeck];
+                const card = newDeck.pop();
+                
+                setPokerState(prev => ({
+                    ...prev,
+                    [deckKey]: newDeck,
+                    isFlipping: true,
+                    lastDrawnCard: null 
+                }));
+
+                setTimeout(() => {
+                    let suitText = '';
+                    let color = '';
+                    if (card.suit === 'S') { suitText = '黑桃'; color = 'text-slate-800'; }
+                    if (card.suit === 'H') { suitText = '紅心'; color = 'text-rose-500'; }
+                    if (card.suit === 'D') { suitText = '方塊'; color = 'text-red-500'; }
+
+                    setPokerState(prev => {
+                        const unassignedPlayer = players.find(p => 
+                            p.gender === prev.currentGender && 
+                            !prev.assignedPlayers.find(ap => ap.id === p.id)
+                        );
+                        let nextAssignedPlayers = prev.assignedPlayers;
+                        if (unassignedPlayer) {
+                            nextAssignedPlayers = [...prev.assignedPlayers, { ...unassignedPlayer, teamSuit: card.suit }];
+                        }
+                        return {
+                            ...prev,
+                            isFlipping: false,
+                            lastDrawnCard: { ...card, text: suitText, color },
+                            assignedPlayers: nextAssignedPlayers
+                        };
+                    });
+                }, 600); 
+            };
+
+            const resetPokerMode = () => {
+                setPokerState({ active: false, maleDeck: [], femaleDeck: [], currentGender: 'M', lastDrawnCard: null, isFlipping: false, assignedPlayers: [] });
+                setMode('casual');
+            };
+
+            const finalizePokerTeams = () => {
+                if (pokerState.assignedPlayers.length < players.length) {
+                    if (!window.confirm("還有球員未抽籤，確定要結束嗎？")) return;
+                }
+                const teamS = pokerState.assignedPlayers.filter(p => p.teamSuit === 'S');
+                const teamH = pokerState.assignedPlayers.filter(p => p.teamSuit === 'H');
+                const teamD = pokerState.assignedPlayers.filter(p => p.teamSuit === 'D');
+                setTeams([teamS, teamH, teamD]);
+                setMatchTeams([1, 2]); 
+                setMode('tournament'); 
+                setTeamCount(3);
+            };
+
+            const getNextPlayerName = () => {
+                const unassigned = players.filter(p => 
+                    p.gender === pokerState.currentGender && 
+                    !pokerState.assignedPlayers.find(ap => ap.id === p.id)
+                );
+                return unassigned.length > 0 ? unassigned[0].name : "已全數抽完";
+            };
+
+            // === 一般/積分 分隊邏輯 ===
+            const generateTeams = () => {
+                if (players.length === 0) return;
+                const males = players.filter(p => p.gender === 'M');
+                const females = players.filter(p => p.gender === 'F');
+                const shuffledMales = shuffleArray(males);
+                const shuffledFemales = shuffleArray(females);
+                const targetTeamCount = mode === 'tournament' ? 3 : teamCount;
+                const newTeams = Array.from({ length: targetTeamCount }, () => []);
+                let teamIndex = 0;
+                shuffledFemales.forEach(player => {
+                    newTeams[teamIndex].push(player);
+                    teamIndex = (teamIndex + 1) % targetTeamCount;
+                });
+                shuffledMales.forEach(player => {
+                    newTeams[teamIndex].push(player);
+                    teamIndex = (teamIndex + 1) % targetTeamCount;
+                });
+                setTeams(newTeams);
+                setCopied(false);
+                if (mode === 'tournament' && targetTeamCount === 3) {
+                    setMatchTeams([1, 2]);
+                } else {
+                    setMatchTeams([0, 1]);
+                }
+                setScore1('');
+                setScore2('');
+            };
+
+            const resetTournament = () => {
+                setMode('casual');
+                setCurrentRound(1);
+                setMatchHistory([]);
+                setScore1('');
+                setScore2('');
+                setPlayers(players.map(p => ({ ...p, score: 0, gamesPlayed: 0 })));
+                setTeams([]);
+            };
+
+            const startTournament = () => {
+                if (players.length < 3) { showToast("人數不足", 'error'); return; }
+                setPlayers(players.map(p => ({ ...p, score: 0, gamesPlayed: 0 })));
+                setMode('tournament');
+                setTeamCount(3);
+                setCurrentRound(1);
+                setMatchHistory([]);
+                setTeams([]); 
+            };
+            
+            const submitMatchResult = () => {
+                const s1 = parseInt(score1);
+                const s2 = parseInt(score2);
+                if (isNaN(s1) || isNaN(s2)) { showToast("請輸入完整的比分", 'error'); return; }
+                
+                const maxScore = Math.max(s1, s2);
+                const minScore = Math.min(s1, s2);
+                const diff = maxScore - minScore;
+                const valid25 = (maxScore === 25 && diff >= 2) || (maxScore > 25 && diff === 2);
+                const valid15 = (maxScore === 15 && diff >= 2) || (maxScore > 15 && diff === 2);
+
+                if (!valid25 && !valid15) {
+                    showToast("分數不對！勝方需為25或15分 (Deuce時需贏2分)", 'error');
+                    return;
+                }
+
+                const t1 = matchTeams[0];
+                const t2 = matchTeams[1];
+                
+                const updatedPlayers = players.map(player => {
+                    const inT1 = teams[t1].find(p => p.id === player.id);
+                    const inT2 = teams[t2].find(p => p.id === player.id);
+                    if (inT1) return { ...player, score: player.score + (s1 > s2 ? 0 : -diff), gamesPlayed: player.gamesPlayed + 1 };
+                    if (inT2) return { ...player, score: player.score + (s2 > s1 ? 0 : -diff), gamesPlayed: player.gamesPlayed + 1 };
+                    return player;
+                });
+                setPlayers(updatedPlayers);
+                setMatchHistory([...matchHistory, { 
+                    round: currentRound, team1: t1+1, team2: t2+1, score1: s1, score2: s2, 
+                    winner: s1 > s2 ? t1+1 : (s2 > s1 ? t2+1 : 'Draw') 
+                }]);
+                setScore1(''); setScore2('');
+                setCurrentRound(currentRound + 1);
+                
+                if (teams.length === 3 && s1 !== s2) {
+                    const winnerIdx = s1 > s2 ? t1 : t2;
+                    const waitingIdx = [0, 1, 2].find(i => i !== t1 && i !== t2);
+                    if (waitingIdx !== undefined) {
+                        setMatchTeams([Math.min(winnerIdx, waitingIdx), Math.max(winnerIdx, waitingIdx)]);
+                    }
+                }
+
+                if ((currentRound + 1) === 4 || (currentRound + 1) === 7) setTeams([]); 
+            };
+
+            const copyToClipboard = () => {
+                if (teams.length === 0) return;
+                let text = `🏐 排球分隊結果 🏐\n\n`;
+                const suitNames = ['黑桃隊 (Spade)', '紅心隊 (Heart)', '方塊隊 (Diamond)'];
+                teams.forEach((team, index) => {
+                    let tName = `第 ${index + 1} 隊`;
+                    if (mode === 'tournament' && teams.length === 3) tName = suitNames[index];
+                    text += `【${tName}】\n${team.map(p => p.name).join(', ')}\n\n`;
+                });
+                navigator.clipboard.writeText(text).then(() => {
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                }).catch(err => {
+                    // Fallback for some browsers
+                    const textArea = document.createElement("textarea");
+                    textArea.value = text;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                });
+            };
+
+            const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
+
+            const renderPokerTeamList = (suit, Icon, colorClass, bgClass) => {
+                const teamPlayers = pokerState.assignedPlayers.filter(p => p.teamSuit === suit);
+                return (
+                    <div className={`rounded-xl border ${bgClass} overflow-hidden`}>
+                        <div className={`px-3 py-2 border-b border-black/5 font-bold flex items-center gap-2 ${colorClass}`}>
+                            <Icon size={16} fill="currentColor" />
+                            <span>{suit === 'S' ? '黑桃隊' : suit === 'H' ? '紅心隊' : '方塊隊'}</span>
+                            <span className="ml-auto text-xs bg-white/50 px-2 py-0.5 rounded-full">{teamPlayers.length}人</span>
+                        </div>
+                        <div className="p-2 min-h-[60px]">
+                        {teamPlayers.length === 0 ? <span className="text-xs text-slate-400 italic pl-1">等待抽卡...</span> : 
+                            <div className="flex flex-wrap gap-1.5">{teamPlayers.map(p => (<span key={p.id} className={`text-xs px-2 py-1 rounded border shadow-sm ${p.gender === 'M' ? 'bg-blue-50 text-blue-700 border-blue-100' : 'bg-pink-50 text-pink-700 border-pink-100'}`}>{p.name}</span>))}</div>}
+                        </div>
+                    </div>
+                );
+            };
+
+            const handleScoreChange = (setter) => (e) => {
+                const val = e.target.value;
+                if (val === '') { setter(''); } 
+                else {
+                    const num = parseInt(val);
+                    if (!isNaN(num) && num >= 0) { setter(num); }
+                }
+            };
+
+            return (
+                <div className="min-h-screen relative pb-20">
+                    {/* Toast Notification */}
+                    {toast.show && (
+                        <div className={`fixed bottom-10 left-1/2 transform -translate-x-1/2 z-50 px-6 py-3 rounded-full shadow-2xl flex items-center space-x-2 animate-in slide-in-from-bottom-5 duration-300 ${toast.type === 'error' ? 'bg-red-500 text-white' : toast.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-white'}`}>
+                            {toast.type === 'error' ? <XCircle size={20}/> : <CheckCircle2 size={20}/>}
+                            <span className="font-bold text-sm">{toast.message}</span>
+                        </div>
+                    )}
+
+                    {/* Header */}
+                    <div className={`${mode === 'tournament' ? 'bg-rose-600' : mode === 'poker' ? 'bg-slate-800' : 'bg-indigo-600'} text-white p-4 shadow-md sticky top-0 z-10 transition-colors duration-500`}>
+                        <div className="max-w-2xl mx-auto flex items-center justify-between">
+                            <div className="flex items-center space-x-2">
+                                <div className="bg-white p-1.5 rounded-full text-current">
+                                    {mode === 'tournament' ? <Trophy size={20} className="text-rose-600"/> : 
+                                    mode === 'poker' ? <Gamepad2 size={20} className="text-slate-800"/> :
+                                    <RefreshCcw size={20} className="text-indigo-600"/>}
+                                </div>
+                                <h1 className="text-xl font-bold tracking-wide">
+                                    {mode === 'tournament' ? '週三季打' : mode === 'poker' ? '撲克牌抽籤' : '季打分隊'}
+                                </h1>
+                            </div>
+                            <div className="text-white/80 text-sm font-medium">{players.length} 人</div>
+                        </div>
+                    </div>
+
+                    <div className="max-w-2xl mx-auto p-4 grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="lg:col-span-2 space-y-6">
+                            {(mode === 'casual') && (
+                                <div className="bg-white rounded-2xl shadow-sm p-4 border border-slate-100">
+                                    <div className="flex space-x-2 mb-3">
+                                        <button onClick={() => setIsBatchMode(false)} className={`flex-1 py-2 text-sm font-medium rounded-lg ${!isBatchMode ? 'bg-slate-100' : 'text-slate-400'}`}>單筆新增</button>
+                                        <button onClick={() => setIsBatchMode(true)} className={`flex-1 py-2 text-sm font-medium rounded-lg ${isBatchMode ? 'bg-slate-100' : 'text-slate-400'}`}>批次匯入</button>
+                                    </div>
+                                    {!isBatchMode ? (
+                                        <div className="flex space-x-2">
+                                            <input type="text" value={nameInput} onChange={(e) => setNameInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="輸入名字..." className="flex-1 px-4 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
+                                            <button onClick={() => setGenderInput(genderInput === 'M' ? 'F' : 'M')} className={`w-12 rounded-xl font-bold ${genderInput === 'M' ? 'bg-blue-100 text-blue-600' : 'bg-pink-100 text-pink-600'}`}>{genderInput === 'M' ? '男' : '女'}</button>
+                                            <button onClick={addPlayer} className="bg-indigo-600 text-white p-2.5 rounded-xl"><UserPlus size={20}/></button>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            <div className="flex justify-between items-center bg-slate-50 p-2 rounded-lg"><span className="text-sm font-medium">預設性別：</span><button onClick={() => setGenderInput(genderInput === 'M' ? 'F' : 'M')} className={`px-4 py-1 text-sm font-bold rounded-lg border ${genderInput === 'M' ? 'text-blue-600 border-blue-200 bg-white' : 'text-pink-600 border-pink-200 bg-white'}`}>{genderInput === 'M' ? '男' : '女'}</button></div>
+                                            <textarea value={batchInput} onChange={(e) => setBatchInput(e.target.value)} placeholder="貼上名單..." className="w-full h-24 px-4 py-2 border rounded-xl text-sm"/>
+                                            <button onClick={handleBatchAdd} className="w-full bg-slate-600 text-white py-2 rounded-xl text-sm">匯入</button>
+                                        </div>
+                                    )}
+                                    {players.length > 0 && (
+                                        <div className="mt-4 pt-4 border-t border-slate-100">
+                                            <div className="flex justify-between mb-2"><span className="text-sm text-slate-500">已加入 {players.length} 人</span><button onClick={clearAllPlayers} className="text-xs text-red-400">清空</button></div>
+                                            <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+                                                {players.map(p => (<div key={p.id} onClick={() => removePlayer(p.id)} className={`flex items-center space-x-1 px-2 py-1 rounded-md border text-xs cursor-pointer ${p.gender === 'M' ? 'bg-blue-50 border-blue-100 text-blue-600' : 'bg-pink-50 border-pink-100 text-pink-600'}`}><span>{p.name}</span><Trash2 size={10}/></div>))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {mode === 'casual' && players.length > 0 && (
+                                <div className="space-y-4">
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <button onClick={generateTeams} className="col-span-2 md:col-span-1 bg-white border-2 border-indigo-600 text-indigo-600 py-3 rounded-xl font-bold hover:bg-indigo-50 flex items-center justify-center space-x-2"><Shuffle size={18}/><span>隨機分隊</span></button>
+                                        <button onClick={startTournament} className="col-span-2 md:col-span-1 bg-gradient-to-r from-rose-500 to-orange-500 text-white py-3 rounded-xl font-bold shadow-lg flex items-center justify-center space-x-2"><Trophy size={18}/><span>開始 週三季打 (3隊)</span></button>
+                                        <button onClick={initPokerDecks} className="col-span-2 bg-slate-800 text-white py-3 rounded-xl font-bold shadow-lg flex items-center justify-center space-x-2 hover:bg-slate-700 transition-all border border-slate-700">
+                                            <div className="flex space-x-1"><Spade size={16} fill="currentColor"/><Heart size={16} fill="currentColor"/></div>
+                                            <span>撲克牌抽籤模式 (18張)</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {mode === 'poker' && (
+                                <div className="bg-slate-800 text-white rounded-2xl shadow-xl overflow-hidden min-h-[500px] flex flex-col relative">
+                                    <div className="flex justify-between items-center p-4 bg-slate-900/50 backdrop-blur-sm border-b border-slate-700">
+                                        <div className="flex items-center space-x-2"><div className="bg-slate-700 px-3 py-1 rounded-full text-xs font-mono">已抽: {pokerState.assignedPlayers.length} / {players.length}</div></div>
+                                        <button onClick={resetPokerMode} className="text-xs text-slate-400 hover:text-white">退出模式</button>
+                                    </div>
+                                    <div className="flex-1 flex flex-col items-center justify-center p-6 space-y-6">
+                                        <div className="animate-in fade-in slide-in-from-top-4 duration-500">
+                                            <div className="flex items-center justify-center space-x-2 bg-slate-700/50 px-4 py-2 rounded-full border border-slate-600">
+                                                <User size={18} className="text-yellow-400" />
+                                                <span className="text-slate-300 text-sm">輪到：</span>
+                                                <span className="text-xl font-bold text-yellow-400">{getNextPlayerName()}</span>
+                                            </div>
+                                        </div>
+                                        <div className="relative w-48 h-72 perspective-1000 cursor-pointer group" onClick={drawCard}>
+                                            <div className={`relative w-full h-full transition-all duration-500 transform-style-3d ${pokerState.isFlipping ? 'rotate-y-180' : ''}`}>
+                                                {!pokerState.lastDrawnCard && !pokerState.isFlipping && (
+                                                    <div className="absolute w-full h-full bg-gradient-to-br from-indigo-600 to-blue-800 rounded-xl border-4 border-white shadow-2xl flex items-center justify-center backface-hidden transform hover:scale-105 transition-transform">
+                                                        <div className="w-40 h-64 border-2 border-dashed border-indigo-400 rounded-lg flex flex-col items-center justify-center opacity-30">
+                                                            <div className="text-6xl font-bold mb-2">?</div><span className="text-sm font-bold tracking-widest">TAP TO DRAW</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                {pokerState.lastDrawnCard && (
+                                                    <div className="absolute w-full h-full bg-white rounded-xl border-4 border-slate-200 shadow-2xl flex flex-col items-center justify-center animate-in zoom-in duration-300">
+                                                        <div className={`${pokerState.lastDrawnCard.color} flex flex-col items-center`}>
+                                                            {pokerState.lastDrawnCard.suit === 'S' && <Spade size={80} fill="currentColor" />}
+                                                            {pokerState.lastDrawnCard.suit === 'H' && <Heart size={80} fill="currentColor" />}
+                                                            {pokerState.lastDrawnCard.suit === 'D' && <Diamond size={80} fill="currentColor" />}
+                                                            <span className="text-3xl font-black mt-4">{pokerState.lastDrawnCard.text}</span>
+                                                            <span className="text-sm font-bold text-slate-400 mt-2">Team {pokerState.lastDrawnCard.suit}</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                {pokerState.isFlipping && !pokerState.lastDrawnCard && <div className="absolute w-full h-full bg-indigo-600 rounded-xl backface-hidden"></div>}
+                                            </div>
+                                        </div>
+                                        <div className="w-full max-w-sm space-y-4">
+                                            <div className="flex justify-center text-sm font-bold text-slate-300 mb-2">請選擇抽卡牌堆</div>
+                                            <div className="flex gap-4">
+                                                <button onClick={() => setPokerState(p => ({ ...p, currentGender: 'M', lastDrawnCard: null }))} className={`flex-1 py-4 rounded-xl border-2 transition-all flex flex-col items-center relative ${pokerState.currentGender === 'M' ? 'bg-blue-600 border-blue-400 text-white shadow-lg scale-105' : 'bg-slate-700 border-slate-600 text-slate-400 opacity-60 hover:opacity-100'}`}>
+                                                    <span className="text-lg font-bold mb-1">男生</span><span className="text-xs bg-black/30 px-2 py-0.5 rounded">剩 {pokerState.maleDeck.length} 張</span>
+                                                    {pokerState.currentGender === 'M' && <div className="absolute -top-2 -right-2 bg-yellow-400 text-black text-xs font-bold px-2 py-1 rounded-full animate-bounce">選定</div>}
+                                                </button>
+                                                <button onClick={() => setPokerState(p => ({ ...p, currentGender: 'F', lastDrawnCard: null }))} className={`flex-1 py-4 rounded-xl border-2 transition-all flex flex-col items-center relative ${pokerState.currentGender === 'F' ? 'bg-pink-600 border-pink-400 text-white shadow-lg scale-105' : 'bg-slate-700 border-slate-600 text-slate-400 opacity-60 hover:opacity-100'}`}>
+                                                    <span className="text-lg font-bold mb-1">女生</span><span className="text-xs bg-black/30 px-2 py-0.5 rounded">剩 {pokerState.femaleDeck.length} 張</span>
+                                                    {pokerState.currentGender === 'F' && <div className="absolute -top-2 -right-2 bg-yellow-400 text-black text-xs font-bold px-2 py-1 rounded-full animate-bounce">選定</div>}
+                                                </button>
+                                            </div>
+                                            <div className="pt-4 text-center">
+                                                {pokerState.assignedPlayers.length > 0 && pokerState.assignedPlayers.length === players.length ? (
+                                                    <button onClick={finalizePokerTeams} className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-xl shadow-lg animate-pulse">抽籤完成！查看隊伍</button>
+                                                ) : (<p className="text-xs text-slate-400">確認上方名字無誤後，點擊卡片</p>)}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {mode === 'tournament' && currentRound <= 9 && (
+                                <div className="bg-white rounded-2xl shadow-lg border-2 border-rose-100 overflow-hidden">
+                                    <div className="bg-rose-50 px-4 py-3 border-b border-rose-100 flex justify-between items-center">
+                                        <div className="flex items-center space-x-2"><span className="bg-rose-600 text-white text-xs font-bold px-2 py-1 rounded">ROUND</span><span className="text-lg font-bold text-rose-800">{currentRound} / 9</span></div>
+                                        <button onClick={resetTournament} className="text-xs text-slate-400 underline hover:text-slate-600">放棄比賽</button>
+                                    </div>
+                                    <div className="p-4 space-y-6">
+                                        {teams.length === 0 ? (
+                                            <div className="text-center py-6 bg-slate-50 rounded-xl border border-dashed border-slate-300">
+                                                <AlertCircle className="mx-auto text-amber-500 mb-2" size={32} />
+                                                <h3 className="text-lg font-bold text-slate-700">{currentRound === 1 ? '準備開始' : '新循環開始'}</h3>
+                                                <p className="text-slate-500 text-sm mb-4">需重新分隊</p>
+                                                <div className="flex gap-2 justify-center">
+                                                    <button onClick={generateTeams} className="bg-indigo-600 text-white px-4 py-2 rounded-full font-bold shadow hover:bg-indigo-700 flex items-center space-x-2"><Shuffle size={16}/><span>隨機分隊</span></button>
+                                                    <button onClick={initPokerDecks} className="bg-slate-800 text-white px-4 py-2 rounded-full font-bold shadow hover:bg-slate-700 flex items-center space-x-2"><Spade size={16}/><span>撲克重抽</span></button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    {teams.map((team, idx) => {
+                                                        const suits = [{ icon: Spade, color: 'text-slate-800', bg: 'bg-slate-100' }, { icon: Heart, color: 'text-rose-500', bg: 'bg-rose-50' }, { icon: Diamond, color: 'text-red-500', bg: 'bg-red-50' }];
+                                                        const style = suits[idx % 3];
+                                                        const Icon = style.icon;
+                                                        return (
+                                                            <div key={idx} className={`rounded-xl border p-2 relative ${matchTeams.includes(idx) ? 'bg-white border-rose-300 ring-2 ring-rose-100' : 'bg-slate-50 border-slate-200 opacity-60'}`}>
+                                                                <div className={`text-center text-sm font-bold mb-2 pb-1 border-b border-slate-100 flex items-center justify-center gap-1 ${style.color}`}><Icon size={14} fill="currentColor"/>Team {idx + 1}</div>
+                                                                <div className="flex flex-wrap gap-1 justify-center">{team.map(p => (<span key={p.id} className="text-xs px-1.5 py-0.5 bg-white/50 rounded text-slate-700 border border-slate-200">{p.name}</span>))}</div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <div className="flex justify-center"><button onClick={copyToClipboard} className="text-xs flex items-center space-x-1 text-slate-400 hover:text-indigo-600 transition-colors">{copied ? <CheckCircle2 size={14}/> : <Copy size={14}/>}<span>複製名單</span></button></div>
+                                                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                                    <div className="flex items-center justify-center mb-4 space-x-2"><Swords size={16} className="text-slate-400"/><span className="text-sm font-bold text-slate-600">選擇對戰組合</span></div>
+                                                    <div className="flex justify-center gap-2 mb-4">
+                                                        {[0,1,2].map((_, i) => {
+                                                            const next = (i+1)%3;
+                                                            const isActive = matchTeams[0] === Math.min(i, next) && matchTeams[1] === Math.max(i, next);
+                                                            return (<button key={i} onClick={() => setMatchTeams([Math.min(i,next), Math.max(i,next)])} className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all ${isActive ? 'bg-rose-500 text-white border-rose-600 shadow-md' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>T{i+1} vs T{next+1}</button>);
+                                                        })}
+                                                    </div>
+                                                    <div className="flex items-center justify-center gap-4 mb-4">
+                                                        <div className="text-center"><span className="block text-xs font-bold text-slate-500 mb-1">Team {matchTeams[0] + 1}</span><input type="number" min="0" value={score1} onChange={handleScoreChange(setScore1)} className="w-16 text-center text-xl font-bold p-2 border-2 border-slate-200 rounded-lg focus:border-rose-500 focus:outline-none text-rose-600"/></div>
+                                                        <span className="text-slate-300 font-bold text-xl mt-4">:</span>
+                                                        <div className="text-center"><span className="block text-xs font-bold text-slate-500 mb-1">Team {matchTeams[1] + 1}</span><input type="number" min="0" value={score2} onChange={handleScoreChange(setScore2)} className="w-16 text-center text-xl font-bold p-2 border-2 border-slate-200 rounded-lg focus:border-rose-500 focus:outline-none text-rose-600"/></div>
+                                                    </div>
+                                                    <button onClick={submitMatchResult} className="w-full bg-slate-800 text-white py-3 rounded-xl font-bold shadow hover:bg-slate-700 flex items-center justify-center space-x-2"><PlayCircle size={20}/><span>結算</span></button>
+                                                    <p className="text-xs text-center text-slate-400 mt-2">* 規則：勝方不加分 (0)，敗方扣分差，贏家連莊</p>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {mode === 'casual' && teams.length > 0 && (
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between px-1"><h2 className="text-lg font-bold text-slate-800">分隊結果</h2><button onClick={copyToClipboard} className="text-sm text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-full hover:bg-indigo-100 font-medium">{copied ? '已複製' : '複製'}</button></div>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">{teams.map((team, idx) => (<div key={idx} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4"><div className="font-bold text-slate-700 mb-2">第 {idx + 1} 隊 <span className="text-xs font-normal text-slate-400 ml-1">({team.length}人)</span></div><div className="flex flex-wrap gap-2">{team.map((player) => (<span key={player.id} className={`px-2 py-1 rounded text-sm ${player.gender === 'M' ? 'bg-blue-50 text-blue-700' : 'bg-pink-50 text-pink-700'}`}>{player.name}</span>))}</div></div>))}</div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="lg:col-span-1 space-y-4">
+                            {mode === 'tournament' && (
+                                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden sticky top-24">
+                                    <div className="bg-slate-50 px-4 py-3 border-b border-slate-200"><h3 className="font-bold text-slate-700 flex items-center"><TrendingUp size={18} className="mr-2 text-emerald-500"/> 即時戰績表</h3></div>
+                                    <div className="max-h-[calc(100vh-200px)] overflow-y-auto">
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-slate-50 text-slate-500 text-left"><tr><th className="px-4 py-2">排名</th><th className="px-2 py-2">姓名</th><th className="px-4 py-2 text-right">積分</th></tr></thead>
+                                            <tbody className="divide-y divide-slate-100">{sortedPlayers.map((player, index) => (<tr key={player.id} className={index < 2 ? "bg-yellow-50" : index >= sortedPlayers.length-2 && sortedPlayers.length >=4 ? "bg-red-50 text-slate-500" : ""}><td className="px-4 py-3 font-bold text-slate-400">{index+1}</td><td className="px-2 py-3 font-medium text-slate-700">{player.name}</td><td className={`px-4 py-3 text-right font-bold ${player.score > 0 ? 'text-emerald-600' : player.score < 0 ? 'text-red-500' : 'text-slate-400'}`}>{player.score}</td></tr>))}</tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            )}
+                            {mode === 'poker' && (
+                                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden sticky top-24">
+                                    <div className="bg-slate-50 px-4 py-3 border-b border-slate-200"><h3 className="font-bold text-slate-700 flex items-center"><LayoutList size={18} className="mr-2 text-indigo-500"/> 即時分隊狀況</h3></div>
+                                    <div className="p-3 space-y-3 max-h-[calc(100vh-200px)] overflow-y-auto">
+                                        {renderPokerTeamList('S', Spade, 'text-slate-700', 'bg-slate-50 border-slate-200')}
+                                        {renderPokerTeamList('H', Heart, 'text-rose-600', 'bg-rose-50 border-rose-200')}
+                                        {renderPokerTeamList('D', Diamond, 'text-red-600', 'bg-red-50 border-red-200')}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
